@@ -24,4 +24,4 @@ add_custom_command(
 )
 
 project(tmp2 VERSION 1.0)
-add_executable(tmp2 welch.c)
+add_executable(tmp2 welch.cpp)
