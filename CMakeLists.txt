@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD 23)
 
 # ソースファイル
 set(SRC_FILES
-    main.cpp
+    welch.cpp
     CMakeLists.txt
     )
 
@@ -22,6 +22,3 @@ add_custom_command(
   TARGET biasdetector 
     POST_BUILD COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR} --config $<CONFIG>
 )
-
-project(tmp2 VERSION 1.0)
-add_executable(tmp2 welch.cpp)

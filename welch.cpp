@@ -120,23 +120,6 @@ static inline float gauss_cdf(float t)
 	return 1.f - erf;
 }
 
-
-
-
-void print_help()
-{
-	printf("Usage: ./welch firstimage.pfm secondimage.pfm <arguments>\n\n");
-
-	printf("-p, --pscale <f>         scale p-values by this for the color map\n");
-	printf("-g                       replace t-dist with gaussian for integration\n");
-	printf("-gt <i>                  set threshold to only replace t-dist with gaussian when nu >= this threshold\n");
-	printf("--sqrt                   visualize square root of p-value instead of p-value\n");
-	printf("-o <s>                   prefix of outfiles (will write out welch.pfm, pvalues.txt and nuvalues.txt\n");
-	printf("--block-size <i>         length and width in pixels of square pixel block used for one welch sample\n");
-	printf("-3                       visualize all three color channels' p-values\n");
-	printf("--help                   print this\n");
-}
-
 //
 struct Pixel
 {
@@ -146,6 +129,10 @@ struct Pixel
 public:
 	Pixel()
 		:r(0.0), g(0.0), b(0.0)
+	{
+	}
+	Pixel(float v)
+		:r(v), g(v), b(v)
 	{
 	}
 	Pixel(double _r, double _g, double _b)
@@ -209,18 +196,7 @@ public:
 		}
 		STBI_FREE(pix);
 	}
-#if 0
-	void savePFM(const char* filename)
-	{
-		FILE* file = fopen(filename, "wb");
-		fprintf(file, "%s", "PF\n");
-		fprintf(file, "%ld %ld\n", width_, height_);
-		fprintf(file, "%s", "-1.000000\n");
-		fwrite(pixels_.data(), sizeof(Pixel), pixels_.size(), file);
-		fclose(file);
-	}
-#endif
-	void saveHDR(const char* filename)
+	void save(const char* filename)
 	{
 		std::vector<float> arr(pixels_.size() * 3);
 		for (int pi = 0; pi < pixels_.size(); ++pi)
@@ -230,7 +206,6 @@ public:
 			arr[pi * 3 + 1] = p.g;
 			arr[pi * 3 + 2] = p.b;
 		}
-		pixels_;
 		stbi_write_hdr(filename, width_, height_, 3, arr.data());
 	}
 
@@ -258,7 +233,7 @@ private:
 	int32_t height_ = 0;
 };
 //
-Image<Pixel> sum_of_square_welch(const Image<Pixel>& src, const int block_size)
+Image<Pixel> sum_of_square_welch(const Image<Pixel>& src, const int block_size, float scale)
 {
 	const int tw = src.width() / block_size;
 	const int th = src.height() / block_size;
@@ -278,13 +253,13 @@ Image<Pixel> sum_of_square_welch(const Image<Pixel>& src, const int block_size)
 					sum += t * t;
 				}
 			}
-			ret(tx, ty) = sum;
+			ret(tx, ty) = sum * Pixel(scale);
 		}
 	}
 	return ret;
 }
 //
-Image<Pixel> sum_welch(const Image<Pixel>& src, const int block_size)
+Image<Pixel> sum_welch(const Image<Pixel>& src, const int block_size, float scale)
 {
 	const int tw = src.width() / block_size;
 	const int th = src.height() / block_size;
@@ -303,7 +278,7 @@ Image<Pixel> sum_welch(const Image<Pixel>& src, const int block_size)
 					sum += src(bx + ox, by + oy);
 				}
 			}
-			ret(tx, ty) = sum;
+			ret(tx, ty) = sum * Pixel(scale);
 		}
 	}
 	return ret;
@@ -337,7 +312,7 @@ Image<Pixel> sum_welch(const Image<Pixel>& src, const int block_size)
  */
 int main(int argc, char* argv[])
 {
-
+	//
 	float p_scale = 1.f;
 	const char* outname_prefix = "";
 	int replace_with_gauss = 0;
@@ -345,27 +320,7 @@ int main(int argc, char* argv[])
 	int visualization_mode = 0; //0 = regular or scaled color scale, 1 = square root
 	int block_size = 32;
 	int vis_three = 0;
-
-#if 0
-	if (argc < 2)
-	{
-		print_help();
-		return 0;
-	}
-	for (int i = 0; i < argc; i++)
-	{
-		if ((strcmp(argv[i], "--pscale") == 0) && argc > i + 1) p_scale = atof(argv[++i]);
-		if ((strcmp(argv[i], "-p") == 0) && argc > i + 1) p_scale = atof(argv[++i]);
-		if ((strcmp(argv[i], "-g") == 0)) replace_with_gauss = 1;
-		if ((strcmp(argv[i], "-gt") == 0) && argc > i + 1) gauss_nu_threshold = atol(argv[++i]);
-		if ((strcmp(argv[i], "--sqrt") == 0)) visualization_mode = 1;
-		if ((strcmp(argv[i], "-o") == 0) && argc > i + 1) outname_prefix = argv[++i];
-		if ((strcmp(argv[i], "--block-size") == 0) && argc > i + 1) block_size = atol(argv[++i]);
-		if ((strcmp(argv[i], "-3") == 0)) vis_three = 1;
-		if ((strcmp(argv[i], "--help") == 0)) { print_help(); return 0; }
-	}
-#endif
-
+	//
 	printf("pscale %f\n", p_scale);
 	printf("blocksize %d\n", block_size);
 	printf("replace gauss? %d, threshold %d \n", replace_with_gauss, gauss_nu_threshold);
@@ -373,43 +328,32 @@ int main(int argc, char* argv[])
 	printf("Vis mode: %d\n", visualization_mode);
 
 	// read img1 and img2 (only needed to extract width, height and debugging info)
-#if 0
-	uint64_t width, height, width2, height2;
-	FILE* fin = fopen(argv[1], "rb");
-	if (!fin) { fprintf(stderr, "could not open %s!\n", argv[1]); exit(1); }
-	fscanf(fin, "PF\n%ld %ld\n%*[^\n]", &width, &height);
-	fgetc(fin); // \n
-	std::vector<float> pixels1(width * height * 3);
-	fread(pixels1.data(), sizeof(float), width * height * 3, fin);
-	fclose(fin);
-#endif
 	Image<Pixel> pixels1;
-	pixels1.load("../bin/pt.hdr");
+	pixels1.load("../bin/pt128spp.hdr");
 	const int32_t width = pixels1.width();
 	const int32_t height = pixels1.height();
 	Image<Pixel> pixels2;
-	pixels2.load("../bin/bpt.hdr");
+	pixels2.load("../bin/pt1024spp.hdr");
 	Image<Pixel> output(pixels1.width(), pixels1.height());
 	const uint64_t w_wd = pixels1.width() / block_size;
 	const uint64_t w_ht = pixels1.height() / block_size;
+
+	// おそらく一ピクセル何sppかの数字？
+	// 1タイルのピクセル数？
+	const double welchsamples1 = 1024.0f;
+	const double welchsamples2 = 1024.0f;
 	//
-	const Image<Pixel> welch1_2 = sum_of_square_welch(pixels1, block_size);
-	const Image<Pixel> welch2_2 = sum_of_square_welch(pixels2, block_size);
-	const Image<Pixel> welch1_1 = sum_welch(pixels1, block_size);
-	const Image<Pixel> welch2_1 = sum_welch(pixels2, block_size);
+	const Image<Pixel> welch1_2 = sum_of_square_welch(pixels1, block_size, 1.0f);
+	const Image<Pixel> welch2_2 = sum_of_square_welch(pixels2, block_size, 1.0f);
+	const Image<Pixel> welch1_1 = sum_welch(pixels1, block_size, 1.0f);
+	const Image<Pixel> welch2_1 = sum_welch(pixels2, block_size, 1.0f);
 	//
 	std::vector<double> pvals(w_wd * w_ht * 3);
 	int pvalcnt = 0; // only fill p-values where they were actually computed. This avoids distortion of the p-value histogram if the images are partially black.
+	//
+	std::vector<int> nuvals(w_wd * w_ht * 3);
 
-	int* nuvals = (int*)malloc(w_wd * w_ht * sizeof(int) * 3);
-
-#if 0
-	const double welchsamples1 = welch1_2[w_wd * w_ht * 3];
-	const double welchsamples2 = welch2_2[w_wd * w_ht * 3];
-#else
-	const double welchsamples1 = 1024.0f; // TODO: まともな数字にする
-	const double welchsamples2 = 1024.0f;
-#endif
+	
 
 	const double n1 = welchsamples1;
 	const double n2 = welchsamples2;
@@ -432,13 +376,8 @@ int main(int argc, char* argv[])
 			double sumX2[3] = { 0.0 };
 			for (int k = 0; k < 3; k++)
 			{
-#if 0
-				sumX1[k] = welch1_1[3 * (j * w_wd + i) + k];
-				sumX2[k] = welch2_1[3 * (j * w_wd + i) + k];
-#else
 				sumX1[k] = welch1_1(i, j)[k];
 				sumX2[k] = welch2_1(i, j)[k];
-#endif
 			}
 
 			double s1_2[3], s2_2[3], tmp[3], t[3];
@@ -450,14 +389,9 @@ int main(int argc, char* argv[])
 			for (int k = 0; k < 3; k++)
 			{
 				// unbiased sample variance
-#if 0
-				s1_2[k] = (1.0 / (n1 - 1.0)) * (welch1_2[3 * (j * w_wd + i) + k] - (n1inv * sumX1[k]) * sumX1[k]);
-				s2_2[k] = (1.0 / (n2 - 1.0)) * (welch2_2[3 * (j * w_wd + i) + k] - (n2inv * sumX2[k]) * sumX2[k]);
-#else
 				s1_2[k] = (1.0 / (n1 - 1.0)) * (welch1_2(i, j)[k] - (n1inv * sumX1[k]) * sumX1[k]);
 				s2_2[k] = (1.0 / (n2 - 1.0)) * (welch2_2(i, j)[k] - (n2inv * sumX2[k]) * sumX2[k]);
-#endif
-
+				//
 				assert(s1_2[k] >= 0.0);
 				assert(s2_2[k] >= 0.0);
 
@@ -502,7 +436,7 @@ int main(int argc, char* argv[])
 				const float p_value = (replace_with_gauss && nu[k] >= gauss_nu_threshold) ? gauss_cdf(t[k]) : 2.f * tcdf64(t[k], nu[k]);
 				cdf = fminf(cdf, p_value); // this cdf is the p-value. The smallest p-value is at the "worst" color channel
 
-				assert(p_value >= 0.f && p_value <= 1.f);
+				assert(p_value >= -0.00001f && p_value <= 1.f);
 				p_values[k] = p_value;
 
 
@@ -526,20 +460,22 @@ int main(int argc, char* argv[])
 				{
 					float col[3];
 					if (visualization_mode == 1)
+					{
 						p_values[kk] = sqrt(p_values[kk]);
+					}
 					const float confidence = fmaxf(0.f, 1.f - (p_values[kk] > 0.f ? (p_scale * p_values[kk]) : 0.f));
 					viridis_quintic(confidence / MAX_P, col);
 
 					for (int jj = 0; jj < block_size; jj++)
+					{
 						for (int ii = (kk * block_size) / 3; ii < ((kk + 1) * block_size) / 3; ii++)
+						{
 							for (int k = 0; k < 3; k++)
 							{
-#if 0
-								output[3 * ((block_size * j + jj) * width + block_size * i + ii) + k] = col[k];
-#else
 								output(block_size * i + ii, block_size * j + jj)[k] = col[k];
-#endif
 							}
+						}
+					}
 				}
 			}
 			else
@@ -547,19 +483,21 @@ int main(int argc, char* argv[])
 				float col[3];
 				//the color method is yellow for large values and pink for values close to zero. The p-value is "good" when it is close to one, so use 1-cdf as argument here
 				if (visualization_mode == 1)
+				{
 					cdf = sqrtf(cdf);
+				}
 				const float confidence = fmaxf(0.f, 1.f - (cdf > 0.f ? (p_scale * cdf) : 0.f));
 				viridis_quintic(confidence / MAX_P, col);
 				for (int jj = 0; jj < block_size; jj++)
+				{
 					for (int ii = 0; ii < block_size; ii++)
+					{
 						for (int k = 0; k < 3; k++)
 						{
-#if 0
-							output[3 * ((block_size * j + jj) * width + block_size * i + ii) + k] = col[k];
-#else
 							output(block_size * i + ii, block_size * j + jj)[k] = col[k];
-#endif
 						}
+					}
+				}
 			}
 		}
 	}
@@ -591,23 +529,37 @@ int main(int argc, char* argv[])
 		}
 	}
 
-	output.saveHDR("result.hdr");
+	output.save("../bin/result.hdr");
 
-
-#if 0
-	// write out nu values
-	snprintf(fnbuffer, sizeof(fnbuffer), "%s_nuvalues.txt", outname_prefix);
-	printf(fnbuffer);
-	FILE* f2 = fopen(fnbuffer, "wb");
-	if (f2)
+	if (true)
 	{
-		for (int k = 0; k < w_wd * w_ht * 3; k++)
+		// write out p-values
+		FILE* f1 = fopen("pvalues.txt", "wb");
+		if (f1)
 		{
-			fprintf(f2, "%d ", nuvals[k]);
+			// print number of p-values that were actually computed
+			fprintf(f1, "%d ", pvalcnt);
+			for (int k = 0; k < pvalcnt; k++)
+			{
+				fprintf(f1, "%f ", pvals[k]);
+			}
+			fclose(f1);
 		}
-		fclose(f2);
 	}
-#endif
+
+	if (true)
+	{
+		// write out nu values
+		FILE* f2 = fopen("nuvalues.txt", "wb");
+		if (f2)
+		{
+			for (int k = 0; k < w_wd * w_ht * 3; k++)
+			{
+				fprintf(f2, "%d ", nuvals[k]);
+			}
+			fclose(f2);
+		}
+}
 
 #if 0 // debug print the cdf function
 	for (int k = 0; k < 100; k++)
