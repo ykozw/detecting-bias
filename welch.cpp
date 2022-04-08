@@ -503,7 +503,7 @@ int main(int argc, char* argv[])
 	}
 
 	// draw color scale:
-	if (true)
+	if (false)
 	{
 		for (int j = 0; j < height; j++)
 		{
