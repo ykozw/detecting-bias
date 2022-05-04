@@ -1,18 +1,15 @@
-# %%
-import imageio
-import numpy as np
+# An unofficial "Detecting Bias in Monte Carlo Renderers using Welch’s t-test"[1] implementation.
+# This code fairly mimics the official example code.
+# [1] A. Jung, J. Hanika, and C. Dachsbacher, “Detecting Bias in Monte Carlo Renderers using Welch’s t-test,” Journal of Computer Graphics Techniques (JCGT), vol. 9, no. 2, pp. 1–25, Jun. 2020, [Online]. Available: http://jcgt.org/published/0009/02/01/
+
 import math
-from PIL import Image, ImageFilter
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import imageio
 
-# %%
-def gauss_cdf(t):
-    tt = abs(t)
-    tt /= math.sqrt(2.0)
-    x = 1.0 / (1.0 + 0.47047 * tt)
-    erf = 1.0 - x * (0.3480242 + x * (-0.0958798 + 0.7478556 * x)) * math.exp(-tt * tt)
-    return 1.0 - erf
-
-# %%
+#
 def tcdf(t, v):
     b = v / (v + t * t)
     c = 1.0
@@ -32,12 +29,12 @@ def tcdf(t, v):
     tmp = 0 if v == 1 else b * c * s
     return 0.5 + (tmp + math.atan(c)) / math.pi
 
-# %%
+#
 def to255(x):
     x = max(min(x,1.0),0.0)
     return int(x * 255)
 
-# %%
+#
 def viridis_quintic(x):
     x = min(1.0, x)
     x2 = x * x
@@ -50,72 +47,75 @@ def viridis_quintic(x):
         to255(+0.300805501 + 2.614650302 * x - 12.019139090 * x2 + 28.933559110 * x3 - 33.491294770 * x4 + 13.762053843 * x5)
     )
 
-def main():
-    # 1ピクセルをウェルチ用の1サンプルとして、
-    # 32x32(=1024ピクセル)のタイルを1024サンプルとして使う
-    img0 = imageio.imread('./bin/bpt.hdr')
-    img1 = imageio.imread('./bin/pt.hdr')
+#
+def diffMain(img0, img1, pvimg, histimg, tileSize=32):
+    #
+    img0 = imageio.imread(img0)
+    img1 = imageio.imread(img1)
     (w,h,_) = img0.shape
-    tileSize = 32
     numTilePixels = tileSize * tileSize
     wt = w//tileSize
     ht = h//tileSize
     img = Image.new("RGB", (wt, ht)) 
-    pix = img.load() #
-    #print(img.shape)
+    pix = img.load()
+    pvs = []
+    # p-value image
     for ty in range(wt):
         for tx in range(wt):
             xb = (tx+0)*tileSize
             xe = (tx+1)*tileSize
             yb = (ty+0)*tileSize
             ye = (ty+1)*tileSize
-            # 3チャンネル分
-            pvs = []
+            #
+            pv3ch = []
             for ch in range(3):
-                #ch = 2
                 t0 = img0[yb:ye,xb:xe,ch].flatten()
                 t1 = img1[yb:ye,xb:xe,ch].flatten()
                 v0 = np.var(t0,ddof=1)
                 v1 = np.var(t1,ddof=1)
                 m0 = np.average(t0)
                 m1 = np.average(t1)
-                # T値を出す
+                # t-value
                 tmp = v0/numTilePixels + v1/numTilePixels
                 if tmp == 0.0 :
-                    pvs.append(1.0)
+                    pv3ch.append(1.0)
                     continue
                 tv = -abs((m0-m1)/math.sqrt(tmp))
-                # 自由度を出す
+                # degrees of freedom
                 denm0 = ((numTilePixels - 1.0) * numTilePixels * numTilePixels )
                 denm1 = ( (v0 * v0) / denm0 + (v1 * v1) / denm0)
-                if denm1 != 0.0:
-                    nu = round( (tmp * tmp) / denm1 )
-                else:
-                    #%tb
-                    #sys.exit(-1)
-                    nu = 1.0
-                # TODO: P値を出す
-                replace_with_gauss = False
-                gauss_nu_threshold = 0.0
-                pv = gauss_cdf(tv) if (replace_with_gauss and nu >= gauss_nu_threshold) else 2.0 * tcdf(tv, nu)
-                pvs.append(pv)
-
-            # 3チャンネルで一番低い値
-            pv = min(pvs)
-            confidence = min(max(1.0 - pv,0.0),1.0)
+                nu = round( (tmp * tmp) / denm1 )
+                # p-value
+                pv = 2.0 * tcdf(tv, nu)
+                pv3ch.append(pv)
             # 
+            pv = min(pv3ch)
+            pvs.append(pv)
+            confidence = min(max(1.0 - pv,0.0),1.0)
             pix[tx,ty] = viridis_quintic(confidence)
 
     img = img.resize((w, h), Image.NEAREST)
-    img.save('pvalue.png')
+    img.save(pvimg)
+
+    # p-value histgram
+    mu = sum(pvs)/float(len(pvs))
+    fig  = plt.figure(figsize=(16,16))
+    ax = plt.axes()
+    ax.set_xlim([0.0,1.0])
+    ax.plot(mu, 0.0, "ro")
+    ax.hist(pvs,bins=32, range=(0.0, 1.0))
+    plt.grid(which='major', ls='solid', color='lightgray')
+    plt.savefig(histimg)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('img0', type=str, help='input image 0(*.hdr)')
+    parser.add_argument('img1', type=str, help='input image 1(*.hdr)')
+    parser.add_argument('--pvimg', type=str, default='pvalue.png',  help='output pvalue image(*.png)')
+    parser.add_argument('--histimg', type=str, default='hist.png',  help='output histgram image(*.png)')
+    parser.add_argument('--tilesize', type=int, default=32,  help='tile size')
+    args = parser.parse_args()
+    diffMain(args.img0, args.img1, pvimg=args.pvimg, histimg=args.histimg, tileSize=args.tilesize)
 
 if __name__ == "__main__":
     main()
-
-
-# %%
-a = np.array([[1,2,3],[4,5,6],[7,8,9]])
-print(a)
-print(a[:3,:2])
-
-
